@@ -8,6 +8,7 @@
 |---|---|---|---|
 | GET | `/api/activities` | DBに保存済みのアクティビティ一覧を取得 | F-02 |
 | POST | `/api/sync` | Garmin Connectから直近30日・全種別を取得しDBにupsert | F-01 |
+| GET | `/api/activities/summary` | 直近7日間・直近28日間の合計距離・合計時間サマリーを取得（ランニングのみ集計） | F-03 |
 
 ## GET /api/activities
 
@@ -59,6 +60,33 @@
 | `fetched` | Garmin Connectから取得したアクティビティ件数 |
 | `upserted` | DBにupsertした件数（通常`fetched`と一致） |
 
+## GET /api/activities/summary
+
+### リクエスト
+
+パラメータなし。
+
+### レスポンス（200 OK）
+
+`activity_type == "running"`のレコードのみを対象に、直近7日間・直近28日間それぞれの合計距離・合計時間を返す。
+
+```json
+{
+  "last_7_days": {
+    "distance_m": 21400.0,
+    "duration_s": 7800.0
+  },
+  "last_28_days": {
+    "distance_m": 98600.0,
+    "duration_s": 35100.0
+  }
+}
+```
+
+対象期間内にランニングの記録が無い場合、`distance_m`・`duration_s`はともに`0.0`（0埋め）で返す。
+
 ## エラーレスポンスの方針
 
 MVPでは詳細なエラーハンドリングは行わない。Garmin Connectへのログイン失敗やネットワークエラーはFastAPIの標準的な500エラーとして返し、詳細なリトライ・エラーメッセージ設計は将来課題とする。フロントエンド側も簡易的なエラーメッセージ表示に留める（[03_画面設計](03_画面設計.md) 参照）。
+
+`GET /api/activities/summary`もDB読み取りのみのエンドポイントであり、上記と同じ方針（明示的なtry/exceptを置かず、FastAPIの標準例外処理に委ねる）がそのまま適用される。
