@@ -1,5 +1,5 @@
 ---
-name: garmin-coding
+name: garmin-coder
 description: Garminアプリのコードを実装・保守する。パイプライン内で唯一ファイル編集権限を持つ。feature-pipelineスキルから呼び出される。
 tools: *
 ---
