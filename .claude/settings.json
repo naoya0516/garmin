@@ -1,0 +1,26 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git commit -m ' *)",
+      "Bash(git tag *)",
+      "Bash(git tag -a v1.1.0-design -m ' *)",
+      "Bash(ls -la .. 2>/dev/null | head -20; echo ---; ls \"c:/Users/highj/ClaudeCode\" 2>/dev/null)",
+      "Read(//c/Users/highj/ClaudeCode/**)",
+      "Edit(/.claude/skills/feature-pipeline/**)",
+      "Edit(/.claude/skills/issue-discuss/**)",
+      "Bash(git status *)",
+      "Bash(git mv *)",
+      "Edit(/.claude/skills/scoped-commit/**)",
+      "Bash(git diff --stat -- .claude/agents/garmin-coder.md .claude/skills/design-review-fix/SKILL.md .claude/skills/feature-pipeline/SKILL.md .claude/skills/scoped-commit/SKILL.md AGENTS.md \"docs/08_詳細設計.md\" *)",
+      "Read(//dev/**)",
+      "Bash(git diff *)",
+      "Bash(git apply *)",
+      "Bash(git check-ignore *)",
+      "Bash(echo \"exit:$?\")",
+      "Bash(git restore *)"
+    ],
+    "additionalDirectories": [
+      "\\tmp"
+    ]
+  }
+}
