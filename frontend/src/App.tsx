@@ -19,21 +19,28 @@ function App() {
     // 03_画面設計の初回ロード/同期後シーケンス図に対応:
     // GET /api/activities → GET /api/activities/summary の順に呼び出し、
     // それぞれ結果をstateにセットする。個別にtry/catchし、片方が失敗しても
-    // もう片方の表示は継続できるようにする（エラーメッセージのみ蓄積して表示）。
+    // もう片方の表示は継続できるようにする。失敗内容はこの回の呼び出し内で
+    // 配列に集約し、最後に1本の文字列へ結合してsetErrorMessageする
+    // （エラーメッセージのみ蓄積して表示。個別にsetErrorMessageすると
+    // 後続の失敗が先の失敗を上書きしてしまうため）。
     // 失敗時もstateはクリアせず直前の表示内容を保持し、真っ白な画面にはしない。
+    const failures: string[] = [];
+
     try {
       const data = await fetchActivities();
       setActivities(data);
     } catch {
-      setErrorMessage("一覧の取得に失敗しました");
+      failures.push("一覧の取得に失敗しました");
     }
 
     try {
       const data = await fetchSummary();
       setSummary(data);
     } catch {
-      setErrorMessage("サマリーの取得に失敗しました");
+      failures.push("サマリーの取得に失敗しました");
     }
+
+    setErrorMessage(failures.length > 0 ? failures.join(" / ") : null);
   }
 
   useEffect(() => {
