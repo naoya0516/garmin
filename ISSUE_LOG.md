@@ -47,3 +47,96 @@
 - `docs/05_API設計.md`（修正対象）
 - `docs/08_詳細設計.md`（暫定案の出典）
 - `DESIGN_REVIEW_LOG.md`（前任コンサルの先送り経緯）
+
+---
+
+## 2026-07-17: 実装着手前の懸念点洗い出し（コンサル・コーダー・コードレビュアー3者議論）
+
+**発生した問題**:
+
+`backend/`・`frontend/`の実装に着手する前に、現状の設計（`docs/01〜08`、`PLAN.md`）に基づいて実装を始めて問題ないか、ユーザーの指示によりコンサル・コーダー・コードレビュアーの3者で懸念点を洗い出した。
+
+**議論**:
+
+コンサル（garmin-consultant）の見解:
+条件付きで着手可能。ただし着手前に対応すべき点が1つある。`PLAN.md`が`docs/08_詳細設計.md`に追随しておらず、ディレクトリ構成・API一覧に`summary.py`/`SummaryPanel.tsx`/`GET /api/activities/summary`/`data/`の記載がない。`AGENTS.md`は「コーディングはPLAN.mdの規約に従って実装」と明記しているため、実装者がPLAN.mdのみを見た場合にF-03を実装から落とすリスクがある。転記作業でありコーチ・情シスの再レビューは不要。加えて実装時の申し送り事項として: (1)`garminconnect`ライブラリの実フィールド構造が未検証の推測値、(2)フォーマット関数で`null`と`0`を区別しないと0埋め表示のバグになりうる、(3)`upsert_activities`の`synced_at`更新が「推奨」止まりで必須になっていない、(4)`sync_lookback_days`が28日未満だとサマリーが未同期期間を含む暗黙の前提、(5)`scripts/init_login.py`だけ他モジュールより詳細設計が薄い、(6)`requirements.txt`のバージョン非固定。F-03の優先度表現揺れ（01と02）は情シス判断済みの軽微事項として対応不要。
+
+コーダー（garmin-coder）の応答:
+すべてに同意。PLAN.mdの整合は自分（実装担当）が実装着手の最初のステップとして行うと表明。加えて、`synced_at`の明示更新やlookback前提のコード注記は自分の裁量で実装時に含めると回答。実装順序として: ①PLAN.md更新 → ②venv構築・使い捨てスクリプトで実ログイン/MFA/生JSON構造を確認 → ③requirements.txtバージョン確定 → ④init_login.py実装 → ⑤バックエンド各モジュールを依存順に実装 → ⑥フロントエンド実装（null厳密判定含む）→ ⑦docs/08記載の検証手順を実施、を提案。
+
+コードレビュアー（garmin-code-reviewer）の応答:
+上記の議論におおむね同意した上で、実装後のレビューで重点的に見るべき点を追加指摘。(a) `synced_at`は`models.py`の`onupdate=func.now()`がORM経由のUPDATEにのみ効き、`sync.py`が使うCore APIの`insert().on_conflict_do_update()`には自動適用されないため、`update_cols`への明示追加が実質必須（コンサル指摘(3)を技術的に補強）。(b) `format.ts`の関数はActivityTable（個別値）とSummaryPanel（集計値、正当に0になりうる）の両方から共用されるため、`null`/`0`の衝突が起きやすい実装になっている。(c) 同一`activity_id`がGarminから1回の取得内で重複返却された場合、`insert().values(rows).on_conflict_do_update()`が同一トランザクション内で同じ行を2回対象にしエラーになりうるが、設計書に重複除去処理の記載がない。(d) `models.py`の`raw_json: Mapped[dict]`が他のnullableカラムと異なり`| None`を欠いている型ヒントの不整合。(e) `activity_type`の`"unknown"`フォールバックと`summary.py`の`"running"`完全一致の相互作用は意図した挙動である旨のコード注記が必要。(f) `docs/08`が実装者の裁量に委ねている分岐点（SummaryPanelのnull時表示、SyncButtonのonError、App.tsxのエラー時state扱い）は、実装後に`03_画面設計.md`の要件を満たしているか個別確認が必要。なお同エージェントが挙げた「基本設計書がgitタグ未設定・全ファイル未コミット」という指摘は誤り（`v1.0.0-design`・`v1.1.0-design`タグは実際には作成済み、コミットも完了済み）で、Bash/git権限を持たないエージェントの推測に基づく誤指摘だったため対応不要と判断した。
+
+**結論・対応**:
+
+実装着手可。ただし着手直後にコーダーが以下を最初のステップとして実施する:
+1. `PLAN.md`を`docs/08_詳細設計.md`に整合させる（ディレクトリ構成・API一覧・依存パッケージ節の転記。あわせて`docs/02_機能一覧.md`のF-03優先度表現の揺れも解消して構わない）
+2. `garminconnect`の実ログイン・MFA・生JSON構造を使い捨てスクリプトで確認してから`sync.py`本実装に入る
+3. `requirements.txt`は確認できたバージョンをピン留めする
+
+実装時に対応する事項（コーダーが実装に組み込む）:
+- `sync.py`の`upsert_activities`で`update_cols`に`synced_at: func.now()`を明示的に含める（Core API経由のため`onupdate`だけでは効かない）
+- `format.ts`は`null`/`0`を`=== null`で明示的に区別する
+- 同一`activity_id`がバッチ内で重複した場合の重複除去処理を`upsert_activities`に追加する（設計書に明記が無かったため実装時に対応）
+- `models.py`の`raw_json`の型ヒントを`Mapped[dict | None]`にする
+- `sync_lookback_days<28`の暗黙の前提、`"unknown"`フォールバックと`"running"`完全一致の相互作用について、該当箇所にコード注記を残す
+
+実装完了後のコードレビュー（garmin-code-reviewer）で重点的に確認する事項:
+- `synced_at`が一括upsert経路でも実際に更新されているか
+- `format.ts`の`null`/`0`表示がActivityTable・SummaryPanelの両方で要件通りか
+- `docs/08`が実装者の裁量に委ねていた分岐点（SummaryPanelのnull時表示、SyncButtonのonError、App.tsxのエラー時state扱い）の実装結果が`03_画面設計.md`の要件を満たしているか
+
+**関連ファイル/参照**:
+- `PLAN.md`（更新対象）
+- `docs/08_詳細設計.md`（実装の主たる拠り所）
+- `docs/02_機能一覧.md`（表現揺れ）
+- `docs/06_外部インターフェース設計.md`（garminconnectのリスク）
+
+---
+
+## 2026-07-17: 着手前対応事項の実施結果と、PLAN.mdの`garth`記述の誤り判明
+
+**発生した問題**:
+
+上記「実装着手前の懸念点洗い出し」で合意した3つの着手前対応事項（PLAN.md整合、garminconnect実挙動確認、requirements.txtピン留め）をコーダーが実施したところ、`PLAN.md`のMFAの扱いに関する既存記述「トークンキャッシュは`garth`が自動保存する」が事実と異なることが判明した。
+
+**議論**:
+
+コーダー（garmin-coder）による調査結果:
+`backend/`にvenvを構築し実際に`garminconnect==0.3.6`をインストールしてソースコード・docstring・バンドルREADMEを確認した結果、`docs/08_詳細設計.md`のGarmin生レスポンス→ORMマッピング表（`activityId`/`activityType.typeKey`/`startTimeLocal`等）はライブラリの型定義と完全に一致し矛盾はなかった。一方、`PLAN.md`に既に書かれていた「`client.login(tokenstore_path)` → `garth`が自動保存」という記述は、実際にインストールされたバージョンでは事実と異なっていた。`garminconnect==0.3.6`は`garth`への依存を持たず（`pip show`のRequiresに`garth`が無い）、curl_cffiベースの独自クライアントで`~/.garminconnect/garmin_tokens.json`等にトークンを保存する方式に変わっている。あわせて、トークンキャッシュが存在しない状態で`login()`を呼んだ際、`GARMIN_EMAIL`/`PASSWORD`が設定済みだとMFA不要な場合にフォールバックで新規ログインが成立してしまう可能性があり、`docs/08`が想定する「トークンキャッシュが無い場合は例外を送出する」という前提と厳密には異なりうることも分かった（`garmin_client.py`実装時に要確認）。
+
+**結論・対応**:
+
+ユーザー承認のもと、`PLAN.md`の「MFAの扱い」節から`garth`の記述を削除し、実際の保存方式（`~/.garminconnect/garmin_tokens.json`等）に修正した。あわせて、今回の調査で判明した経緯である旨を本エントリへの参照として明記した。「トークンキャッシュが無い場合の挙動が想定と異なりうる」点はドキュメント修正の対象にはせず、`garmin_client.py`実装時にコーダーが確認する申し送り事項として残す。
+
+あわせて`.gitignore`に`backend/venv/` `backend/.env` `backend/data/` `backend/.garmin_tokens/` `frontend/dist/`を追加した（`backend/`ディレクトリが今回新規作成されたため）。
+
+**関連ファイル/参照**:
+- `PLAN.md`（MFAの扱い節を修正）
+- `.gitignore`（backend関連の除外ルールを追加）
+- `backend/requirements.txt`（`garminconnect==0.3.6`固定）
+
+---
+
+## 2026-07-17: フロントエンド初期化方針をcatan-game流用から独立構成に変更
+
+**発生した問題**:
+
+MVP実装フェーズで、`PLAN.md`の方針（フロントエンドの`vite.config.ts`/`tsconfig*.json`/`.oxlintrc.json`/`package.json`を兄弟プロジェクト`catan-game`から流用する）に従い、コーディング担当が`catan-game`の実ファイルを読んで設定を踏襲しようとしていた。作業を見たユーザーから「Garminアプリは独立したプロジェクトなので、他プロジェクトのファイルを読まない方が良いのでは」という指摘があった。
+
+**議論**:
+
+ユーザーとの直接のやり取りで検討（今回はエージェント間の議論ではなくユーザー・アシスタント間の意思決定）。catan-game参照の目的は「Vite+React+TSの動く設定を一から書く手間を省く」ことのみで機能的な必然性は無い一方、以下のデメリットがあると整理した:
+- 個人のホビープロジェクト間で設定を揃える機能的必然性は無い（`docs/07_非機能要件.md`の位置づけとも整合）
+- catan-game固有の設定（ゲーム用path alias、oxlintルール調整等）が意図せず混入し、「独立したプロジェクト」という前提と矛盾するリスクがある
+- 標準の`npm create vite@latest -- --template react-ts`は公式かつ枯れた足場であり、事故りにくい
+- 無関係な他プロジェクトのソースコードを実装エージェントが読む必要が生じ、非効率
+
+ユーザーはこの整理に同意し、方針変更を承認した。
+
+**結論・対応**:
+
+`PLAN.md`の該当2箇所（Context節の冒頭、フロントエンド設計節）を、catan-game流用の記述から「`npm create vite@latest frontend -- --template react-ts`の標準テンプレートを使い、本プロジェクト単体で完結させる」という記述に変更した。`.oxlintrc.json`もcatan-gameを参照せず新規に最小構成で作成する方針とした。この変更を反映した上でMVP実装を再開する。
+
+**関連ファイル/参照**:
+- `PLAN.md`（Context節・フロントエンド設計節を修正）

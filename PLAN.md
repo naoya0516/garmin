@@ -6,7 +6,7 @@
 
 Garminで記録した走行データ（ランニング等）を管理し、将来的にはカレンダー表示や分析機能を持つアプリを作りたい。今回のスコープはその第一歩として、Garmin Connectからアクティビティデータを取得し、DBに保存し、Web画面に一覧表示するところまで。カレンダーや分析機能は将来の拡張とし、今回は設計時にそれを阻害しないデータ構造にする程度に留める。
 
-`c:\Users\highj\ClaudeCode\garmin` は現状空のディレクトリ。兄弟プロジェクト `catan-game`（Vite + React + TypeScript構成）の設定パターンを踏襲する。
+`c:\Users\highj\ClaudeCode\garmin` は現状空のディレクトリ。フロントエンドは他プロジェクトを参照せず、`npm create vite@latest -- --template react-ts` の標準テンプレートから作成し、本プロジェクト単体で完結させる（2026-07-17: 当初は兄弟プロジェクト`catan-game`の設定を流用する方針だったが、独立したプロジェクトとして完結させるべきという判断で変更。詳細は`ISSUE_LOG.md`の同日エントリ参照）。
 
 ## 合意済み要件
 
@@ -26,6 +26,7 @@ garmin/
 │   ├── requirements.txt
 │   ├── .env.example
 │   ├── scripts/init_login.py     # 初回ログイン専用（MFA対応、ターミナルで手動実行）
+│   ├── data/                     # garmin.db格納先（gitignore対象、初回起動時に自動生成）
 │   └── app/
 │       ├── main.py               # FastAPIアプリ、CORS、create_all、ルーター登録
 │       ├── config.py             # .env読み込み
@@ -35,20 +36,22 @@ garmin/
 │       ├── garmin_client.py      # ログイン・直近N日取得ラッパー
 │       ├── sync.py               # upsertロジック
 │       ├── pace.py               # ペース計算 (distance/duration → min/km)
-│       └── routers/activities.py # GET /api/activities, POST /api/sync
-└── frontend/                     # catan-gameのvite.config/tsconfig/oxlint設定を踏襲、zustandは不要なので除外
+│       ├── summary.py            # F-03 走行サマリー集計（直近7日/28日のランニング合計距離・時間）
+│       └── routers/activities.py # GET /api/activities, POST /api/sync, GET /api/activities/summary
+└── frontend/                     # npm create vite@latestの標準テンプレート(react-ts)から作成
     └── src/
         ├── App.tsx                # マウント時fetch＋同期ボタン押下で再fetchのオーケストレーション
         ├── types.ts                # Activity型（ActivityOutと1:1対応）
         ├── api/client.ts           # fetchActivities(), syncActivities()
         ├── components/ActivityTable.tsx
         ├── components/SyncButton.tsx
+        ├── components/SummaryPanel.tsx  # F-03 サマリーブロック表示（直近7日/28日の合計距離・時間）
         └── utils/format.ts         # ペース/時間/日付の整形
 ```
 
 ## バックエンド設計
 
-**MFAの扱い**: `Garmin(email, password, prompt_mfa=...)` の `prompt_mfa` はブロッキング入力になるため、FastAPIのリクエストハンドラ内では使わない。初回のみ `scripts/init_login.py` を手動実行してトークンキャッシュ（`client.login(tokenstore_path)` → `garth`が自動保存）を作成し、以降 `POST /api/sync` はキャッシュ済みトークンを再利用するだけにする。
+**MFAの扱い**: `Garmin(email, password, prompt_mfa=...)` の `prompt_mfa` はブロッキング入力になるため、FastAPIのリクエストハンドラ内では使わない。初回のみ `scripts/init_login.py` を手動実行してトークンキャッシュ（`client.login(tokenstore_path)` が`~/.garminconnect/garmin_tokens.json`等に保存）を作成し、以降 `POST /api/sync` はキャッシュ済みトークンを再利用するだけにする。（2026-07-17の実装着手前調査で判明: `garminconnect==0.3.6`は`garth`に依存せず、curl_cffiベースの独自クライアントでトークンを保存する方式になっている。当初想定していた「`garth`が自動保存」という記述は誤りだったため訂正した。詳細は`ISSUE_LOG.md`の同日エントリ参照）
 
 **`models.py` の `Activity` テーブル**（GarminのactivityIdを主キーにしてupsertで重複防止。将来の分析拡張に備え生レスポンスも保持）:
 - `activity_id` (BigInteger, PK) — GarminのactivityId
@@ -64,11 +67,14 @@ garmin/
 
 **`sync.py`**: SQLiteの `INSERT ... ON CONFLICT(activity_id) DO UPDATE`（`sqlalchemy.dialects.sqlite.insert`）でupsert。
 
+**`summary.py`**（F-03 走行サマリー集計）: DBに保存済みのアクティビティから、直近7日間・直近28日間の`activity_type == "running"`のレコードのみを対象に合計距離・合計時間を集計する。Garmin通信は行わない。`calc_running_summary(db, now=None) -> ActivitySummaryOut`を提供し、該当レコードが0件の場合はCOALESCEにより0.0/0.0を返す。
+
 **APIエンドポイント**（`routers/activities.py`、prefix `/api`）:
 | Method | Path | 説明 |
 |---|---|---|
 | GET | `/activities` | DBから`start_time_local desc`で一覧取得（`limit`クエリ、既定50） |
 | POST | `/sync` | Garminから直近30日・全種別を取得しupsert。`{"fetched": int, "upserted": int}`を返す |
+| GET | `/activities/summary` | F-03。DBの既同期データから直近7日間・直近28日間のランニング合計距離・合計時間を集計して返す（`ActivitySummaryOut`） |
 
 **`main.py`**: `CORSMiddleware`で`http://localhost:5173`を許可。`Base.metadata.create_all(bind=engine)`でテーブル作成（Alembic等のマイグレーションツールは今回不要）。
 
@@ -76,11 +82,12 @@ garmin/
 
 ## フロントエンド設計
 
-catan-gameの `package.json`/`vite.config.ts`/`tsconfig*.json`/`.oxlintrc.json` を流用し、`zustand`依存は除外（状態が単純なため`useState`/`useEffect`で十分。将来カレンダー機能等で複雑化したら追加）。
+`npm create vite@latest frontend -- --template react-ts` で標準テンプレートを作成し、デモ用のボイラープレート（カウンターボタン等）を削除して置き換える。状態管理ライブラリは導入しない（状態が単純なため`useState`/`useEffect`で十分。将来カレンダー機能等で複雑化したら検討）。リンターは`.oxlintrc.json`を新規に最小構成で追加する（他プロジェクトの設定は参照しない）。
 
 - `api/client.ts`: `fetchActivities()` (GET /api/activities), `syncActivities()` (POST /api/sync)。`VITE_API_BASE_URL`環境変数、既定`http://localhost:8000`
 - `ActivityTable.tsx`: Propsでデータを受け取るだけの純粋表示コンポーネント。列は日付・種別・距離・時間・ペース・平均心拍・カロリー
 - `SyncButton.tsx`: 押下中ローディング表示、完了後`onSynced`コールバックで親に再fetchを促す
+- `SummaryPanel.tsx`: F-03のサマリーブロック（直近7日間・直近28日間の合計距離・合計時間）を表示する純粋表示コンポーネント。Propsで`ActivitySummary | null`を受け取るだけで、フェッチ・状態管理は行わない
 - `App.tsx`: マウント時に一覧取得、同期ボタン押下後に再取得。エラーは簡易メッセージ表示のみ
 
 ## セットアップ手順
@@ -112,4 +119,4 @@ npm run dev    # http://localhost:5173
 
 ## ステータス
 
-2026-07-17時点: 要件定義・設計完了。実装はまだ着手していない。
+2026-07-18時点: MVP実装完了。バックエンド（pytest 11件pass）・フロントエンド（`npm run build`/`lint`成功）を確認済み。実アカウントでの`scripts/init_login.py`実行・`POST /api/sync`（14件同期）・ブラウザでの表示確認もユーザー自身により完了済み。
